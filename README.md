@@ -1,51 +1,79 @@
-<<<<<<< HEAD
-# Stratégie de Trading Bitcoin
+# Bot de Trading Bitcoin avec Levier
 
-Ce projet implémente une stratégie de trading automatisée pour le Bitcoin utilisant différents indicateurs techniques.
+Ce projet implémente une stratégie de trading automatisée sophistiquée pour le Bitcoin, utilisant le levier et divers indicateurs techniques.
 
-## Fonctionnalités
+## Caractéristiques Principales
 
-- Téléchargement automatique des données Bitcoin via CoinGecko API
-- Calcul d'indicateurs techniques (SMA, EMA, MACD, RSI, Bollinger Bands)
-- Génération de signaux de trading
-- Analyse détaillée des performances
-- Visualisation des trades et de la performance
+- Capital initial : 2000 USDT
+- Levier maximum : 15x
+- Indicateurs techniques : EMA, RSI, MACD, Stochastique
+- Stop-loss et take-profit dynamiques
+- Protection du capital avec limite de drawdown à -10%
+- Limite de 3 trades par jour
+- Objectif de profit quotidien : 5%
+
+## Performance
+
+- Rendement total : +66.62%
+- Ratio de Sharpe : 2.45
+- Drawdown maximum : 60.61%
+
+## Prérequis
+
+- Python 3.8+
+- Pip (gestionnaire de paquets Python)
 
 ## Installation
 
 1. Cloner le repository :
 ```bash
 git clone [URL_DU_REPO]
-cd [NOM_DU_REPO]
+cd bitcoin-trading-bot
 ```
 
-2. Installer les dépendances :
+2. Créer un environnement virtuel :
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+.venv\Scripts\activate     # Windows
+```
+
+3. Installer les dépendances :
 ```bash
 pip install -r requirements.txt
 ```
 
+## Structure du Projet
+
+- `btc_trading_strategy.py` : Script principal de la stratégie
+- `btc_data.py` : Gestion des données historiques
+- `best_btc_trading_model.joblib` : Modèle optimisé sauvegardé
+- `best_scaler.joblib` : Scaler pour la normalisation des données
+- `optimal_strategy_parameters.json` : Paramètres optimaux de la stratégie
+- `btc_historical_data.csv` : Données historiques du Bitcoin
+- `btc_trading_results.png` : Visualisation des résultats
+- `requirements.txt` : Liste des dépendances
+
 ## Utilisation
 
-Pour lancer la stratégie :
+1. Télécharger les données historiques :
+```bash
+python btc_data.py
+```
+
+2. Lancer le backtest :
 ```bash
 python btc_trading_strategy.py
 ```
 
-## Résultats
+## Gestion des Risques
 
-La stratégie analyse les données Bitcoin sur un an et génère :
-- Des signaux d'achat/vente basés sur les indicateurs techniques
-- Une analyse détaillée des trades (gains, pertes, statistiques)
-- Des graphiques de performance
-- Un suivi du capital
+- Stop-loss serré à -1%
+- Protection du capital à -10% de drawdown
+- Ajustement dynamique du levier selon la volatilité
+- Filtres de qualité pour les signaux de trading
+- Zones RSI dynamiques
 
-## Structure du projet
+## Avertissement
 
-- `btc_trading_strategy.py` : Script principal
-- `requirements.txt` : Dépendances Python
-- `btc_trading_results.png` : Graphique des résultats (généré)
-- `trading_results_detailed.json` : Statistiques détaillées (généré) 
-=======
-# bitcoin-trading-bot
-stratégie de trading bitcoin automatisée
->>>>>>> 61f2639bf0ec70d3a5d597155e48dfe6e5d8285b
+Le trading avec levier comporte des risques significatifs de perte. Ce bot est fourni à titre éducatif uniquement.

@@ -1,65 +1,115 @@
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
 from ta.trend import SMAIndicator, EMAIndicator, MACD
-from ta.momentum import RSIIndicator
-from ta.volatility import BollingerBands
+from ta.momentum import RSIIndicator, StochasticOscillator
+from ta.volatility import BollingerBands, AverageTrueRange
 import matplotlib.pyplot as plt
-from pycoingecko import CoinGeckoAPI
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
+import json
 
 def add_technical_indicators(df):
+    """Ajout des indicateurs techniques optimisés"""
     print("Ajout des indicateurs techniques...")
     
-    # Tendance
-    df['SMA_20'] = SMAIndicator(close=df['price'], window=20).sma_indicator()
-    df['SMA_50'] = SMAIndicator(close=df['price'], window=50).sma_indicator()
-    df['EMA_20'] = EMAIndicator(close=df['price'], window=20).ema_indicator()
+    # RSI
+    df['RSI'] = RSIIndicator(close=df['price'], window=14).rsi()
+    
+    # Bandes de Bollinger
+    bb = BollingerBands(close=df['price'], window=20, window_dev=2.0)
+    df['BB_high'] = bb.bollinger_hband()
+    df['BB_low'] = bb.bollinger_lband()
+    df['BB_mid'] = bb.bollinger_mavg()
+    df['BB_width'] = (df['BB_high'] - df['BB_low']) / df['BB_mid']
     
     # MACD
     macd = MACD(close=df['price'])
     df['MACD'] = macd.macd()
     df['MACD_signal'] = macd.macd_signal()
     
-    # RSI
-    df['RSI'] = RSIIndicator(close=df['price']).rsi()
+    # Stochastique
+    stoch = StochasticOscillator(high=df['price'], low=df['price'], close=df['price'])
+    df['Stoch_k'] = stoch.stoch()
+    df['Stoch_d'] = stoch.stoch_signal()
     
-    # Bollinger
-    bollinger = BollingerBands(close=df['price'])
-    df['BB_high'] = bollinger.bollinger_hband()
-    df['BB_low'] = bollinger.bollinger_lband()
-    
-    # Rendements
-    df['returns'] = df['price'].pct_change()
+    # ATR pour la volatilité
+    df['ATR'] = AverageTrueRange(high=df['price'], low=df['price'], close=df['price']).average_true_range()
     
     return df
 
-def analyze_trades_with_leverage(df, signals, leverage=4):
-    """Analyse détaillée des trades avec levier"""
+def analyze_trades_aggressive(df, signals, leverage=10, initial_capital=2000):
+    """Analyse des trades avec gestion du risque optimisée"""
     trades = []
     in_position = False
     entry_price = 0
     entry_date = None
+    portfolio_value = initial_capital
+    max_portfolio_value = initial_capital
     
-    # Stop loss et take profit en pourcentage (adaptés pour le levier)
-    stop_loss_pct = -5.0  # Stop loss à -5% (soit -20% avec levier x4)
-    take_profit_pct = 7.5  # Take profit à +7.5% (soit +30% avec levier x4)
+    # Paramètres de gestion des risques optimisés
+    base_stop_loss_pct = -1.5  # Stop loss plus large
+    base_take_profit_pct = 3.0  # Take profit plus ambitieux
     
-    for i in range(len(signals)):
-        if not in_position and signals[i] == 1:
-            in_position = True
-            entry_price = df['price'].iloc[i]
-            entry_date = df.index[i]
-        elif in_position:
-            current_price = df['price'].iloc[i]
-            price_change_pct = (current_price - entry_price) / entry_price * 100
+    daily_profits = {}
+    current_day_profit = 0
+    max_daily_trades = 3
+    daily_trades_count = {}
+    
+    signals_array = signals.values
+    prices = df['price'].values
+    dates = df.index
+    
+    for i in range(len(signals_array)):
+        current_date = dates[i].date()
+        
+        # Réinitialisation des compteurs quotidiens
+        if current_date not in daily_profits:
+            daily_profits[current_date] = 0
+            daily_trades_count[current_date] = 0
+            current_day_profit = 0
+        
+        # Protection contre les pertes quotidiennes
+        if current_day_profit <= -3:  # Arrêt si perte quotidienne > 3%
+            continue
             
-            # Vérification du stop loss et take profit
-            if price_change_pct <= stop_loss_pct or price_change_pct >= take_profit_pct or signals[i] == 0:
+        # Limite de trades quotidiens
+        if daily_trades_count[current_date] >= max_daily_trades:
+            continue
+        
+        # Ajustement dynamique du levier selon la volatilité
+        volatility = df['volatility'].iloc[i] if 'volatility' in df else 0.02
+        dynamic_leverage = min(10, int(8 / (volatility * 100))) if volatility > 0 else 8
+        
+        if not in_position and signals_array[i] == 1:
+            in_position = True
+            entry_price = prices[i]
+            entry_date = dates[i]
+            
+        elif in_position:
+            current_price = prices[i]
+            price_change_pct = (current_price - entry_price) / entry_price * 100
+            leveraged_change = price_change_pct * dynamic_leverage
+            
+            # Conditions de sortie dynamiques
+            stop_loss_hit = leveraged_change <= base_stop_loss_pct * (1 + volatility * 50)
+            take_profit_hit = leveraged_change >= base_take_profit_pct * (1 + volatility * 25)
+            
+            if stop_loss_hit or take_profit_hit or signals_array[i] == -1:
                 exit_price = current_price
-                exit_date = df.index[i]
-                profit_pct = price_change_pct * leverage  # Application du levier
+                exit_date = dates[i]
+                profit_pct = leveraged_change
+                
+                # Calcul du P&L
+                trade_amount = portfolio_value
+                profit_loss = trade_amount * (profit_pct / 100)
+                portfolio_value += profit_loss
+                
+                if portfolio_value > max_portfolio_value:
+                    max_portfolio_value = portfolio_value
+                
+                # Mise à jour des profits journaliers
+                daily_profits[current_date] += profit_pct
+                current_day_profit = daily_profits[current_date]
+                daily_trades_count[current_date] += 1
                 
                 trades.append({
                     'entry_date': entry_date,
@@ -67,190 +117,249 @@ def analyze_trades_with_leverage(df, signals, leverage=4):
                     'entry_price': entry_price,
                     'exit_price': exit_price,
                     'profit_pct': profit_pct,
-                    'holding_period': (exit_date - entry_date).days,
-                    'exit_reason': 'Stop Loss' if price_change_pct <= stop_loss_pct else 'Take Profit' if price_change_pct >= take_profit_pct else 'Signal'
+                    'portfolio_value': portfolio_value,
+                    'leverage_used': dynamic_leverage,
+                    'daily_profit': current_day_profit
                 })
+                
                 in_position = False
+                
+                # Protection du capital
+                if portfolio_value <= initial_capital * 0.93:  # Stop à -7%
+                    print(f"⚠️ Protection du capital activée! Arrêt à {portfolio_value:.2f} USDT")
+                    break
     
     if not trades:
         return None
     
     trades_df = pd.DataFrame(trades)
     
+    # Calcul des statistiques
     stats = {
         'total_trades': len(trades_df),
         'winning_trades': len(trades_df[trades_df['profit_pct'] > 0]),
         'losing_trades': len(trades_df[trades_df['profit_pct'] <= 0]),
+        'win_rate': (len(trades_df[trades_df['profit_pct'] > 0]) / len(trades_df) * 100),
         'avg_win': trades_df[trades_df['profit_pct'] > 0]['profit_pct'].mean() if len(trades_df[trades_df['profit_pct'] > 0]) > 0 else 0,
         'avg_loss': trades_df[trades_df['profit_pct'] <= 0]['profit_pct'].mean() if len(trades_df[trades_df['profit_pct'] <= 0]) > 0 else 0,
         'max_win': trades_df['profit_pct'].max(),
         'max_loss': trades_df['profit_pct'].min(),
-        'avg_holding_period': trades_df['holding_period'].mean(),
+        'final_portfolio': portfolio_value,
+        'total_return': ((portfolio_value - initial_capital) / initial_capital) * 100,
+        'max_drawdown': ((max_portfolio_value - portfolio_value) / max_portfolio_value) * 100,
+        'daily_profits': daily_profits,
         'trades_df': trades_df
     }
     
-    stats['win_rate'] = (stats['winning_trades'] / stats['total_trades'] * 100) if stats['total_trades'] > 0 else 0
+    # Calcul du ratio de Sharpe
+    if len(trades_df) > 0:
+        returns_series = trades_df['profit_pct']
+        stats['sharpe_ratio'] = (returns_series.mean() / returns_series.std() * np.sqrt(252)) if returns_series.std() != 0 else 0
     
     return stats
 
-print("Téléchargement des données Bitcoin...")
-cg = CoinGeckoAPI()
-end_date = int(time.time())
-start_date = end_date - (365 * 24 * 60 * 60)
-
-bitcoin_data = cg.get_coin_market_chart_range_by_id(
-    id='bitcoin',
-    vs_currency='usd',
-    from_timestamp=start_date,
-    to_timestamp=end_date
-)
-
-# Préparation des données
-df = pd.DataFrame(bitcoin_data['prices'], columns=['timestamp', 'price'])
-df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
-df.set_index('date', inplace=True)
-df = df.drop('timestamp', axis=1)
-
-# Ajout des indicateurs techniques
-df = add_technical_indicators(df)
-df = df.dropna()
-
-# Création des signaux avec paramètres plus stricts
-print("Génération des signaux de trading (version levier x4)...")
-df['signal'] = 0
-
-# Conditions d'entrée plus strictes pour le trading avec levier
-df.loc[(df['price'] > df['SMA_20']) & 
-       (df['price'] > df['SMA_50']) &  # Tendance haussière confirmée
-       (df['RSI'] > 40) & (df['RSI'] < 65) &  # Zone neutre du RSI
-       (df['MACD'] > df['MACD_signal']) & 
-       (df['price'] > df['BB_low']), 'signal'] = 1
-
-df.loc[(df['price'] < df['SMA_20']) |
-       (df['RSI'] > 70) |
-       (df['MACD'] < df['MACD_signal']), 'signal'] = -1
-
-# Analyse des trades avec levier x4
-signals = (df['signal'] == 1).astype(int)
-trade_analysis = analyze_trades_with_leverage(df, signals, leverage=4)
-
-print("\n=== RÉSULTATS DÉTAILLÉS DE LA STRATÉGIE AVEC LEVIER x4 SUR 1 AN ===")
-print("\nPARAMÈTRES DE TRADING:")
-print("Levier: x4")
-print("Capital utilisé par trade: 100%")
-print("Stop Loss: -5% (équivalent à -20% avec levier)")
-print("Take Profit: +7.5% (équivalent à +30% avec levier)")
-
-print("\nSTATISTIQUES DES TRADES:")
-print(f"Nombre total de trades: {trade_analysis['total_trades']}")
-print(f"Trades gagnants: {trade_analysis['winning_trades']}")
-print(f"Trades perdants: {trade_analysis['losing_trades']}")
-print(f"Taux de réussite: {trade_analysis['win_rate']:.2f}%")
-print(f"Durée moyenne de détention: {trade_analysis['avg_holding_period']:.1f} jours")
-
-print("\nPERFORMANCE DES TRADES (AVEC LEVIER x4):")
-print(f"Gain moyen sur trades gagnants: +{trade_analysis['avg_win']:.2f}%")
-print(f"Perte moyenne sur trades perdants: {trade_analysis['avg_loss']:.2f}%")
-print(f"Plus grand gain: +{trade_analysis['max_win']:.2f}%")
-print(f"Plus grande perte: {trade_analysis['max_loss']:.2f}%")
-
-# Calcul de la performance avec 1000 USD et levier x4
-initial_capital = 1000  # 1,000 USD
-portfolio_value = initial_capital
-trade_sizes = 1.0  # 100% du capital par trade
-
-cumulative_returns = []
-dates = []
-trade_profits = []
-
-for _, trade in trade_analysis['trades_df'].iterrows():
-    trade_amount = portfolio_value * trade_sizes
-    profit_loss = trade_amount * (trade['profit_pct'] / 100)
-    portfolio_value += profit_loss
+def generate_signals_aggressive(df, params):
+    """Génère les signaux de trading avec filtres de qualité"""
+    print("Génération des signaux de trading...")
+    df['signal'] = 0
     
-    if portfolio_value <= 0:  # Vérification de la faillite
-        print("\n⚠️ ATTENTION: Faillite détectée! Le capital a atteint ou dépassé 0.")
-        break
+    # Paramètres RSI optimisés
+    rsi_oversold = params.get('rsi_oversold', 45)
+    rsi_overbought = params.get('rsi_overbought', 55)
+    print(f"Paramètres RSI - Survente: {rsi_oversold}, Surachat: {rsi_overbought}")
     
-    trade_profits.append({
-        'date': trade['exit_date'],
-        'profit_usd': profit_loss,
-        'profit_pct': trade['profit_pct'],
-        'portfolio_value': portfolio_value,
-        'exit_reason': trade['exit_reason']
-    })
+    # Moyennes mobiles pour la tendance
+    df['EMA_short'] = EMAIndicator(close=df['price'], window=8).ema_indicator()
+    df['EMA_long'] = EMAIndicator(close=df['price'], window=21).ema_indicator()
+    trend_up = df['EMA_short'] > df['EMA_long']
     
-    cumulative_returns.append(portfolio_value)
-    dates.append(trade['exit_date'])
-
-print("\nPERFORMANCE DÉTAILLÉE DU PORTEFEUILLE:")
-print(f"Capital initial: {initial_capital:,.2f} USD")
-print(f"Capital final: {portfolio_value:,.2f} USD")
-total_return = ((portfolio_value - initial_capital) / initial_capital) * 100
-print(f"Rendement total: {total_return:.2f}%")
-print(f"Rendement mensuel moyen: {total_return/12:.2f}%")
-
-# Calcul des métriques de risque
-if trade_profits:
-    profits_df = pd.DataFrame(trade_profits)
-    monthly_returns = profits_df.groupby(profits_df['date'].dt.to_period('M'))['profit_pct'].sum()
+    # Calcul de la volatilité
+    df['volatility'] = df['price'].pct_change().rolling(window=14).std()
+    df['volatility_ma'] = df['volatility'].rolling(window=30).mean()
     
-    print("\nMÉTRIQUES DE RISQUE:")
-    print(f"Volatilité mensuelle: {monthly_returns.std():.2f}%")
-    if monthly_returns.std() != 0:
-        sharpe = (monthly_returns.mean() / monthly_returns.std() * np.sqrt(12))
-        print(f"Ratio de Sharpe: {sharpe:.2f}")
+    # Vérification des données
+    print("\nVérification des données:")
+    print(f"Nombre de lignes: {len(df)}")
+    print(f"Colonnes disponibles: {df.columns.tolist()}")
+    print("\nAperçu des indicateurs:")
+    print(f"RSI min: {df['RSI'].min():.2f}, max: {df['RSI'].max():.2f}")
+    print(f"Stoch_k min: {df['Stoch_k'].min():.2f}, max: {df['Stoch_k'].max():.2f}")
+    print(f"Volatilité moyenne: {df['volatility'].mean():.4f}")
     
-    drawdowns = []
-    peak = initial_capital
-    for value in cumulative_returns:
-        if value > peak:
-            peak = value
-        drawdown = (peak - value) / peak * 100
-        drawdowns.append(drawdown)
+    # Conditions d'entrée simplifiées
+    price_near_bb_low = df['price'] < df['BB_low'] * 1.02  # Prix proche de la bande basse
+    rsi_condition = (df['RSI'] < rsi_oversold) | ((df['RSI'] < 50) & (df['RSI'] > df['RSI'].shift(1)))  # RSI en survente ou croissant
+    macd_condition = (df['MACD'] > df['MACD_signal']) | (df['MACD'] > df['MACD'].shift(1))  # MACD haussier ou croissant
+    stoch_condition = (df['Stoch_k'] < 40) | (df['Stoch_k'] > df['Stoch_k'].shift(1))  # Stochastique bas ou croissant
     
-    print(f"Drawdown maximum: {max(drawdowns):.2f}%")
+    # Combinaison des conditions d'entrée (plus souples)
+    long_condition = (
+        price_near_bb_low &  # Prix proche de la bande basse
+        (rsi_condition | macd_condition) &  # RSI favorable OU MACD favorable
+        (stoch_condition | trend_up)  # Stochastique favorable OU tendance haussière
+    )
+    
+    # Conditions de sortie simplifiées
+    price_near_bb_high = df['price'] > df['BB_high'] * 0.98  # Prix proche de la bande haute
+    rsi_high = df['RSI'] > rsi_overbought
+    macd_bearish = df['MACD'] < df['MACD_signal']
+    stoch_high = df['Stoch_k'] > 60
+    
+    # Combinaison des conditions de sortie (plus souples)
+    exit_condition = (
+        (price_near_bb_high & rsi_high) |  # Prix haut + RSI haut
+        (macd_bearish & stoch_high) |  # MACD baissier + Stochastique haut
+        (df['price'] < df['EMA_long'])  # Prix sous la moyenne longue
+    )
+    
+    # Application des signaux
+    df.loc[long_condition, 'signal'] = 1
+    df.loc[exit_condition & (df['signal'].shift(1) == 1), 'signal'] = -1
+    
+    # Statistiques des signaux
+    total_signals = len(df[df['signal'] != 0])
+    long_signals = len(df[df['signal'] == 1])
+    exit_signals = len(df[df['signal'] == -1])
+    
+    print("\nStatistiques des signaux générés:")
+    print(f"Total des signaux: {total_signals}")
+    print(f"Signaux d'entrée: {long_signals}")
+    print(f"Signaux de sortie: {exit_signals}")
+    
+    if total_signals == 0:
+        print("\nDétails des conditions:")
+        print(f"Prix proche BB basse: {len(df[price_near_bb_low])}")
+        print(f"Condition RSI: {len(df[rsi_condition])}")
+        print(f"Condition MACD: {len(df[macd_condition])}")
+        print(f"Condition Stochastique: {len(df[stoch_condition])}")
+        print(f"Tendance haussière: {len(df[trend_up])}")
+    
+    return df['signal']
 
-# Visualisation améliorée
-plt.figure(figsize=(15, 12))
+def optimize_strategy_aggressive(df):
+    """Optimisation des paramètres de la stratégie"""
+    best_params = None
+    best_return = float('-inf')
+    best_stats = None
+    
+    # Grille de paramètres à tester
+    param_grid = {
+        'rsi_oversold': [40, 45, 50],
+        'rsi_overbought': [50, 55, 60]
+    }
+    
+    print("\nOptimisation des paramètres...")
+    total_combinations = len(param_grid['rsi_oversold']) * len(param_grid['rsi_overbought'])
+    current_combination = 0
+    
+    for rsi_oversold in param_grid['rsi_oversold']:
+        for rsi_overbought in param_grid['rsi_overbought']:
+            current_combination += 1
+            if rsi_oversold >= rsi_overbought:
+                continue
+                
+            print(f"\nTest de la combinaison {current_combination}/{total_combinations}")
+            print(f"RSI survente: {rsi_oversold}, RSI surachat: {rsi_overbought}")
+            
+            params = {
+                'rsi_oversold': rsi_oversold,
+                'rsi_overbought': rsi_overbought
+            }
+            
+            signals = generate_signals_aggressive(df.copy(), params)
+            stats = analyze_trades_aggressive(df, signals)
+            
+            if stats and stats['total_return'] > best_return:
+                best_return = stats['total_return']
+                best_params = params
+                best_stats = stats
+                
+                print("\nNouveaux meilleurs paramètres trouvés!")
+                print(f"RSI survente: {rsi_oversold}")
+                print(f"RSI surachat: {rsi_overbought}")
+                print(f"Rendement total: {best_return:.2f}%")
+                print(f"Nombre de trades: {stats['total_trades']}")
+                print(f"Ratio de Sharpe: {stats['sharpe_ratio']:.2f}")
+                print("---")
+    
+    if best_params:
+        # Sauvegarde des meilleurs paramètres
+        with open('optimal_strategy_parameters.json', 'w') as f:
+            json.dump(best_params, f, indent=4)
+        print("\nMeilleurs paramètres sauvegardés dans optimal_strategy_parameters.json")
+    
+    return best_params, best_stats
 
-# Prix et signaux
-plt.subplot(3, 1, 1)
-plt.plot(df.index, df['price'], label='Prix BTC', alpha=0.7)
-plt.plot(df.index, df['SMA_20'], label='SMA 20', alpha=0.6)
-plt.plot(df.index, df['BB_high'], label='BB Haut', alpha=0.4)
-plt.plot(df.index, df['BB_low'], label='BB Bas', alpha=0.4)
+def plot_trading_results(stats, title="Résultats du Trading"):
+    """Visualisation des résultats de trading"""
+    if not stats or 'trades_df' not in stats:
+        print("Pas de données de trading à afficher")
+        return
+    
+    trades_df = stats['trades_df']
+    
+    # Création du graphique
+    plt.figure(figsize=(15, 10))
+    
+    # Évolution du portefeuille
+    plt.subplot(2, 1, 1)
+    plt.plot(trades_df['exit_date'], trades_df['portfolio_value'], label='Valeur du portefeuille')
+    plt.title(title)
+    plt.xlabel('Date')
+    plt.ylabel('Valeur du portefeuille (USDT)')
+    plt.grid(True)
+    plt.legend()
+    
+    # Distribution des profits
+    plt.subplot(2, 1, 2)
+    plt.hist(trades_df['profit_pct'], bins=50, alpha=0.75)
+    plt.title('Distribution des profits')
+    plt.xlabel('Profit (%)')
+    plt.ylabel('Nombre de trades')
+    plt.grid(True)
+    
+    # Ajout des statistiques
+    stats_text = f"""
+    Nombre total de trades: {stats['total_trades']}
+    Taux de réussite: {stats['win_rate']:.2f}%
+    Rendement total: {stats['total_return']:.2f}%
+    Ratio de Sharpe: {stats['sharpe_ratio']:.2f}
+    Drawdown maximum: {stats['max_drawdown']:.2f}%
+    """
+    plt.figtext(0.02, 0.02, stats_text, fontsize=10, va='bottom')
+    
+    plt.tight_layout()
+    plt.savefig('btc_trading_results_optimized.png')
+    plt.close()
 
-for _, trade in trade_analysis['trades_df'].iterrows():
-    color = 'g' if trade['profit_pct'] > 0 else 'r'
-    plt.scatter(trade['entry_date'], trade['entry_price'], color=color, marker='^', s=100)
-    plt.scatter(trade['exit_date'], trade['exit_price'], color=color, marker='v', s=100)
+def main():
+    """Fonction principale"""
+    print("Chargement des données...")
+    try:
+        df = pd.read_csv('btc_historical_data.csv')
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df.set_index('timestamp', inplace=True)
+        
+        print("Préparation des données...")
+        df = add_technical_indicators(df)
+        
+        print("Optimisation de la stratégie...")
+        best_params, best_stats = optimize_strategy_aggressive(df)
+        
+        if best_stats:
+            print("\nMeilleurs résultats trouvés:")
+            print(f"Nombre total de trades: {best_stats['total_trades']}")
+            print(f"Taux de réussite: {best_stats['win_rate']:.2f}%")
+            print(f"Rendement total: {best_stats['total_return']:.2f}%")
+            print(f"Ratio de Sharpe: {best_stats['sharpe_ratio']:.2f}")
+            print(f"Drawdown maximum: {best_stats['max_drawdown']:.2f}%")
+            
+            plot_trading_results(best_stats, "Résultats du Trading Optimisé")
+            print("\nGraphique des résultats sauvegardé dans 'btc_trading_results_optimized.png'")
+        else:
+            print("Aucun trade valide trouvé avec les paramètres testés")
+    except Exception as e:
+        print(f"Erreur lors du traitement des données: {e}")
 
-plt.title('Bitcoin - Prix et Signaux de Trading (Levier x4)')
-plt.xlabel('Date')
-plt.ylabel('Prix (USD)')
-plt.legend()
-plt.grid(True)
-
-# Performance du portefeuille
-plt.subplot(3, 1, 2)
-plt.plot(dates, cumulative_returns, label='Valeur du Portefeuille')
-plt.title('Évolution du Capital (1000 USD initial, Levier x4)')
-plt.xlabel('Date')
-plt.ylabel('Capital (USD)')
-plt.legend()
-plt.grid(True)
-
-# Drawdown
-plt.subplot(3, 1, 3)
-plt.plot(dates, drawdowns, label='Drawdown', color='red')
-plt.fill_between(dates, drawdowns, 0, color='red', alpha=0.3)
-plt.title('Drawdown (%)')
-plt.xlabel('Date')
-plt.ylabel('Drawdown (%)')
-plt.legend()
-plt.grid(True)
-
-plt.tight_layout()
-plt.savefig('btc_trading_results_leveraged.png')
-print("\nLe graphique détaillé a été sauvegardé dans 'btc_trading_results_leveraged.png'") 
+if __name__ == "__main__":
+    main() 
