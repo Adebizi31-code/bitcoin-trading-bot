@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Stratégie de Trading Bitcoin
 
 Ce projet implémente une stratégie de trading automatisée pour le Bitcoin utilisant différents indicateurs techniques.
@@ -44,3 +45,7 @@ La stratégie analyse les données Bitcoin sur un an et génère :
 - `requirements.txt` : Dépendances Python
 - `btc_trading_results.png` : Graphique des résultats (généré)
 - `trading_results_detailed.json` : Statistiques détaillées (généré) 
+=======
+# bitcoin-trading-bot
+stratégie de trading bitcoin automatisée
+>>>>>>> 61f2639bf0ec70d3a5d597155e48dfe6e5d8285b
